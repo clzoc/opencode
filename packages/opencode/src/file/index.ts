@@ -258,6 +258,39 @@ export namespace File {
     return false
   }
 
+  async function real(p: string) {
+    return fs.promises.realpath(p).catch(() => undefined)
+  }
+
+  async function canonical(p: string) {
+    const full = path.resolve(p)
+    const hit = await real(full)
+    if (hit) return hit
+
+    const tail = [path.basename(full)]
+    let dir = path.dirname(full)
+    while (true) {
+      const root = await real(dir)
+      if (root) return path.join(root, ...tail)
+      const parent = path.dirname(dir)
+      if (parent === dir) return full
+      tail.unshift(path.basename(dir))
+      dir = parent
+    }
+  }
+
+  async function within(p: string) {
+    const child = await canonical(p)
+    const roots = [await canonical(Instance.directory)]
+    if (Instance.worktree !== "/") roots.push(await canonical(Instance.worktree))
+    return roots.some((root) => Filesystem.contains(root, child))
+  }
+
+  async function assertPath(p: string) {
+    if (await within(p)) return
+    throw new Error(`Access denied: path escapes project directory`)
+  }
+
   export const Event = {
     Edited: BusEvent.define(
       "file.edited",
@@ -429,11 +462,7 @@ export namespace File {
     const project = Instance.project
     const full = path.join(Instance.directory, file)
 
-    // TODO: Filesystem.contains is lexical only - symlinks inside the project can escape.
-    // TODO: On Windows, cross-drive paths bypass this check. Consider realpath canonicalization.
-    if (!Instance.containsPath(full)) {
-      throw new Error(`Access denied: path escapes project directory`)
-    }
+    await assertPath(full)
 
     // Fast path: check extension before any filesystem operations
     if (isImageByExtension(file)) {
@@ -509,11 +538,7 @@ export namespace File {
     }
     const resolved = dir ? path.join(Instance.directory, dir) : Instance.directory
 
-    // TODO: Filesystem.contains is lexical only - symlinks inside the project can escape.
-    // TODO: On Windows, cross-drive paths bypass this check. Consider realpath canonicalization.
-    if (!Instance.containsPath(resolved)) {
-      throw new Error(`Access denied: path escapes project directory`)
-    }
+    await assertPath(resolved)
 
     const nodes: Node[] = []
     for (const entry of await fs.promises
